@@ -67,34 +67,48 @@ class ClientHandlers:
 
     async def get_car(self, call: CallbackQuery, callback_data: CarsCallback, state: FSMContext) -> Message:
         name_car = callback_data.name_car
-        await state.update_data(data={"uid": call.from_user.id, "name_car": name_car, "url": f"{base_url}{callback_data.url_car}"})
+        await state.update_data(
+            data={
+                "uid": call.from_user.id,
+                "name_car": name_car,
+                "url": f"{base_url}{callback_data.url_car}"
+            }
+        )
 
-        if name_car == "BMW":
-            series = [
-                "1 series", '2 series', '3 series', '4 series', '5 series', '6 series', '7 series', '8 series', 'M series', 'X series', 'Z series', 'i series'
+        car_map = {
+            "BMW": [
+                "1 Series", "2 Series", "3 Series", "4 Series", "5 Series",
+                "6 Series", "7 Series", "8 Series", "M Series",
+                "X Series", "Z Series", "i Series"
+            ],
+            "Mercedes": [
+                "A-Class", "B-Class", "C-Class", "CL-Class", "CLA-Class",
+                "CLK-Class", "CLS-Class", "E-Class", "G-Class", "GL-Class",
+                "GLA-Class", "GLB-Class", "GLC-Class", "GLE-Class", "GLK-Class",
+                "GLS-Class", "ML-Class", "R-Class", "S-Class", "SL-Class",
+                "SLK-Class", "V-Class", "X-Class", "Mercedes-Benz", "Citan", "Sprinter", "Vaneo", "Viano", "Vito"
             ]
+        }
 
-            return await call.message.edit_text(
-                "Here are the series for BMW:\nSelect a series:", reply_markup=await IKB.models_buttons_menu(models=[serie for serie in series])
+        if name_car in car_map:
+            models = car_map[name_car]
+            text = (
+                f"🚘 <b>{name_car}</b>\n\n"
+                f"<i>Here are the available models:</i>\n"
+                f"➡️ <u>Select one below</u>:"
             )
-        
-        elif name_car == 'Mercedes':
-            classes = [
-                "A-class", "B-class", "C-class", "CL-class", "CLA-class", "CLK-class", "CLS-class", "E-class", "G-class", "GL-clase", "GLA-class", "GLB-class", "GLC-class", "GLE-class", "GLK-clase", "GLS-class", "ML-class", "R-class", "S-class", "SL-class", "SLK-class", "V-class", "X-class", "Mercedes-benz"
-            ]
+            return await call.message.edit_text(text, reply_markup=await IKB.models_buttons_menu(models=models))
 
-            return await call.message.edit_text(
-                "Here are the classes for Mercedes:\nSelect a class:", reply_markup=await IKB.models_buttons_menu(models=[class_id for class_id in classes])
-            )
-        
-        else:
-            models_cars = await get_models_cars(url=f"{base_url}{callback_data.url_car}search/")
-            if not models_cars:
-                return await call.message.edit_text("No models")
+        models_cars = await get_models_cars(url=f"{base_url}{callback_data.url_car}search/")
+        if not models_cars:
+            return await call.message.edit_text("❌ <b>No models found</b>")
 
-            return await call.message.edit_text(
-                f"Here are the models for {name_car}:\nSelect a model:", reply_markup=await IKB.models_buttons_menu(models=models_cars)
-            )
+        text = (
+            f"🚗 <b>{name_car}</b>\n\n"
+            f"<i>Here are the available models:</i>\n"
+            f"➡️ <u>Select one below</u>:"
+        )
+        return await call.message.edit_text(text, reply_markup=await IKB.models_buttons_menu(models=models_cars))
 
     
     async def get_model(self, call: CallbackQuery, callback_data: ModelsCallback, state: FSMContext) -> Message:
@@ -106,34 +120,32 @@ class ClientHandlers:
         selected_models = None
         if car in ("BMW", "Mercedes") and model_name:
             models = await get_models(url=base_url)
+
             if models:
                 selected = models.get(model_name)
+
                 if selected_models := selected:
                     await state.update_data(models=selected, model=model_name)
 
-        if model_name:
-            if not selected_models:
-                await state.update_data(models=model_name, model=model_name)
+        if model_name and not selected_models:
+            await state.update_data(models=model_name, model=model_name)
 
         years = await get_years(url=f"{base_url}search/")
         if not years:
-            return await call.message.edit_text("no years")
+            return await call.message.edit_text("❌ <b>No years available</b>")
 
         await state.update_data(years=years)
 
         text = (
-            f"You selected the brand: {car or 'No selected'}\n"
-            f"You selected the model/series: {model_name or 'No selected'}\n"
-            f"Please select a minimum year:"
+            f"🚘 <b>Brand:</b> {car or '<i>Not selected</i>'}\n"
+            f"📍 <b>Model/Series:</b> {model_name or '<i>Not selected</i>'}\n\n"
+            f"📅 <u>Please select a minimum year</u>:"
         )
 
-        return await call.message.edit_text(
-            text,
-            reply_markup=await IKB.years_buttons_menu(years=years, action="car_years_min")
-        )
+        return await call.message.edit_text(text, reply_markup=await IKB.years_buttons_menu(years=years, action="car_years_min"))
 
     
-    async def get_year_min(self, call: CallbackQuery, callback_data: YearsCallback, state: FSMContext) -> Message:
+    async def get_year_min(self, call: CallbackQuery, callback_data: YearsCallback,  state: FSMContext) -> Message:
         data = await state.get_data()
         years = data.get('years', [])
         min_year = callback_data.year
@@ -144,89 +156,91 @@ class ClientHandlers:
         else:
             filtered_years = years
 
-        return await call.message.edit_text(
-            (
-                f"You selected minimum year: {min_year or 'No selected'}.\n"
-                "Now select the maximum year, or skip this step."
-            ), reply_markup=await IKB.years_buttons_menu(years=filtered_years, action='car_years_max')
+        text = (
+            f"📅 <b>Minimum year selected:</b> {min_year or '<i>Not selected</i>'}\n\n"
+            f"➡️ <u>Now select the maximum year</u>, or skip this step."
         )
+
+        return await call.message.edit_text(text, reply_markup=await IKB.years_buttons_menu(years=filtered_years, action="car_years_max"))
 
     
     async def get_year_max(self, call: CallbackQuery, callback_data: YearsCallback, state: FSMContext) -> Message:
         data = await state.get_data()
-        model_name = data.get('model') or "No selected"
+        model_name = data.get("model") or "<i>Not selected</i>"
         max_year = callback_data.year
         await state.update_data(max_year=max_year)
 
-        displacements = await get_displacement_motor(url=data.get('url', None))
+        displacements = await get_displacement_motor(url=data.get("url", None))
         if not displacements:
-            return await call.message.edit_text("no displacement")
+            return await call.message.edit_text("❌ <b>No displacement data available</b>", parse_mode="HTML")
         
         await state.update_data(displacements=displacements, years=None)
-        return await call.message.edit_text(
-            (
-                f"You selected the brand: {data.get('name_car', 'No selected')}\n"
-                f"You selected the model: {model_name}\n"
-                f"Minimum year: {data.get('min_year', 'No selected')}\n"
-                f"Maximum year: {max_year or 'No selected'}\n"
-                f"Now, please select the engine displacement:"
-            ), reply_markup=await IKB.displacement_buttons_menu(displacements=displacements, action='min_displacement')
+
+        text = (
+            f"🚘 <b>Brand:</b> {data.get('name_car', '<i>Not selected</i>')}\n"
+            f"📍 <b>Model:</b> {model_name}\n"
+            f"📅 <b>Minimum year:</b> {data.get('min_year') or '<i>Not selected</i>'}\n"
+            f"📅 <b>Maximum year:</b> {max_year or '<i>Not selected</i>'}\n\n"
+            f"⚙️ <u>Please select the engine displacement</u>:"
         )
+
+        return await call.message.edit_text(text, reply_markup=await IKB.displacement_buttons_menu(displacements=displacements, action="min_displacement"))
     
 
     async def get_displacement_min(self, call: CallbackQuery, callback_data: DisplacementCallback, state: FSMContext) -> Message:
         data = await state.get_data()
-        displacements = data.get('displacements', [])
+        displacements = data.get("displacements", [])
         min_displacement = callback_data.displacement
         await state.update_data(min_displacement=min_displacement)
 
         if min_displacement is not None:
-            filtered_displacement = [displacement for displacement in displacements if displacement > min_displacement] or [min_displacement]
+            filtered_displacement = [d for d in displacements if d > min_displacement] or [min_displacement]
         else:
             filtered_displacement = displacements
 
-        return await call.message.edit_text(
-            (
-                f"You selected minimum engine capacity: {min_displacement}. Now, please select the maximum engine capacity.\n\n"
-                f"Brand: {data.get('name_car', 'No selected')}\n"
-                f"Model: {data.get('model', 'No selected')}\n"
-                f"Minimum Year: {data.get('min_year', 'No selected')}\n"
-                f"Maximum Year: {data.get('max_year', 'No selected')}\n"
-                f"Minimum Engine Volume: {min_displacement or 'No selected'}\n"
-            ), reply_markup=await IKB.displacement_buttons_menu(displacements=filtered_displacement, action='max_displacement')
+        text = (
+            f"⚙️ <b>Minimum engine capacity selected:</b> {min_displacement or '<i>Not selected</i>'}\n\n"
+            f"➡️ <u>Please select the maximum engine capacity</u>:\n\n"
+            f"🚘 <b>Brand:</b> {data.get('name_car') or '<i>Not selected</i>'}\n"
+            f"📍 <b>Model:</b> {data.get('model') or '<i>Not selected</i>'}\n"
+            f"📅 <b>Minimum Year:</b> {data.get('min_year') or '<i>Not selected</i>'}\n"
+            f"📅 <b>Maximum Year:</b> {data.get('max_year') or '<i>Not selected</i>'}\n"
+            f"🔧 <b>Minimum Engine Volume:</b> {min_displacement or '<i>Not selected</i>'}"
         )
-    
+
+        return await call.message.edit_text(text, reply_markup=await IKB.displacement_buttons_menu(displacements=filtered_displacement, action="max_displacement"))
+
 
     async def get_displacement_max(self, call: CallbackQuery, callback_data: DisplacementCallback, state: FSMContext) -> Message:
         data = await state.get_data()
-        model_name = data.get('model') or "No selected"
+        model_name = data.get("model") or "<i>Not selected</i>"
         max_displacement = callback_data.displacement
         await state.update_data(max_displacement=max_displacement)
 
         typengines = await get_typengines(url=f"{data.get('url', None)}search/")
         if not typengines:
-            return await call.message.edit_text(f"no typengine")
+            return await call.message.edit_text("❌ <b>No engine types available</b>", parse_mode="HTML")
 
         await state.update_data(displacements=None, typengines=[], all_typengines=typengines)
 
-        return await call.message.edit_text(
-            (
-                f"You selected maximum engine capacity: {max_displacement}.\n\n"
-                f"Brand: {data.get('name_car', 'No selected')}\n"
-                f"Model: {model_name}\n"
-                f"Minimum Year: {data.get('min_year', 'No selected')}\n"
-                f"Maximum Year: {data.get('max_year', 'No selected')}\n"
-                f"Minimum Engine Volume: {data.get('min_displacement', 'No selected')}\n"
-                f"Maximum Engine Volume: {max_displacement or 'No selected'}\n\n"
-                f"Now, please select the engine type (or skip this step):"
-            ), reply_markup=await IKB.typengine_buttons_menu(typengines=typengines, selected_typengines=None)
+        text = (
+            f"🔧 <b>Maximum engine capacity selected:</b> {max_displacement or '<i>Not selected</i>'}\n\n"
+            f"🚘 <b>Brand:</b> {data.get('name_car', '<i>Not selected</i>')}\n"
+            f"📍 <b>Model:</b> {model_name}\n"
+            f"📅 <b>Minimum Year:</b> {data.get('min_year') or '<i>Not selected</i>'}\n"
+            f"📅 <b>Maximum Year:</b> {data.get('max_year') or '<i>Not selected</i>'}\n"
+            f"⚙️ <b>Minimum Engine Volume:</b> {data.get('min_displacement') or '<i>Not selected</i>'}\n"
+            f"⚙️ <b>Maximum Engine Volume:</b> {max_displacement or '<i>Not selected</i>'}\n\n"
+            f"➡️ <u>Please select the engine type</u> (or skip this step):"
         )
+
+        return await call.message.edit_text(text, reply_markup=await IKB.typengine_buttons_menu(typengines=typengines, selected_typengines=None))
 
 
     async def get_typengine(self, call: CallbackQuery, callback_data: TypengineCallback, state: FSMContext) -> Message:
         data = await state.get_data()
-        typengines = data.get('typengines', [])
-        all_typengines = data.get('all_typengines', [])
+        typengines = data.get("typengines", [])
+        all_typengines = data.get("all_typengines", [])
         typengine = callback_data.typengine
 
         if typengine:
@@ -237,37 +251,38 @@ class ClientHandlers:
 
             await state.update_data(typengines=typengines)
 
-            return await call.message.edit_text(
-                (
-                    f"You selected engine type: {', '.join(typengines) or 'No selected'}!\n\n"
-                    f"Brand: {data.get('name_car', 'No selected')}\n"
-                    f"Model: {data.get('model') or 'No selected'}\n"
-                    f"Minimum Year: {data.get('min_year', 'No selected')}\n"
-                    f"Maximum Year: {data.get('max_year', 'No selected')}\n"
-                    f"Minimum Engine Volume: {data.get('min_displacement', 'No selected')}\n"
-                    f"Maximum Engine Volume: {data.get('max_displacement', 'No selected')}\n"
-                    "Now, please select the engine type (or skip this step):"
-                ), reply_markup=await IKB.typengine_buttons_menu(typengines=all_typengines, selected_typengines=typengines)
+            text = (
+                f"⚙️ <b>Engine type selected:</b> {', '.join(typengines) or '<i>Not selected</i>'}\n\n"
+                f"🚘 <b>Brand:</b> {data.get('name_car', '<i>Not selected</i>')}\n"
+                f"📍 <b>Model:</b> {data.get('model') or '<i>Not selected</i>'}\n"
+                f"📅 <b>Minimum Year:</b> {data.get('min_year') or '<i>Not selected</i>'}\n"
+                f"📅 <b>Maximum Year:</b> {data.get('max_year') or '<i>Not selected</i>'}\n"
+                f"🔧 <b>Minimum Engine Volume:</b> {data.get('min_displacement') or '<i>Not selected</i>'}\n"
+                f"🔧 <b>Maximum Engine Volume:</b> {data.get('max_displacement') or '<i>Not selected</i>'}\n\n"
+                f"➡️ <u>Please select the engine type</u> (or skip this step):"
             )
+
+            return await call.message.edit_text(text, reply_markup=await IKB.typengine_buttons_menu(typengines=all_typengines, selected_typengines=typengines))
+
         else:
             await state.update_data(all_typengines=None)
 
             gearbox = await get_gearbox(url=f"{data.get('url', None)}search/")
             if not gearbox:
-                return await call.message.edit_text(f"no gearbox")
+                return await call.message.edit_text("❌ <b>No gearbox data available</b>")
 
-            return await call.message.edit_text(
-                (
-                    f"You selected engine type: {', '.join(typengines) or 'No selected'}!\n\n"
-                    f"Brand: {data.get('name_car', 'No selected')}\n"
-                    f"Model: {data.get('model') or 'No selected'}\n"
-                    f"Minimum Year: {data.get('min_year', 'No selected')}\n"
-                    f"Maximum Year: {data.get('max_year', 'No selected')}\n"
-                    f"Minimum Engine Volume: {data.get('min_displacement', 'No selected')}\n"
-                    f"Maximum Engine Volume: {data.get('max_displacement', 'No selected')}\n"
-                    "Select the type of gearbox (or skip this step):"
-                ), reply_markup=await IKB.gerabox_buttons_menu(geraboxes=gearbox)
+            text = (
+                f"⚙️ <b>Engine type selected:</b> {', '.join(typengines) or '<i>Not selected</i>'}\n\n"
+                f"🚘 <b>Brand:</b> {data.get('name_car', '<i>Not selected</i>')}\n"
+                f"📍 <b>Model:</b> {data.get('model') or '<i>Not selected</i>'}\n"
+                f"📅 <b>Minimum Year:</b> {data.get('min_year') or '<i>Not selected</i>'}\n"
+                f"📅 <b>Maximum Year:</b> {data.get('max_year') or '<i>Not selected</i>'}\n"
+                f"🔧 <b>Minimum Engine Volume:</b> {data.get('min_displacement') or '<i>Not selected</i>'}\n"
+                f"🔧 <b>Maximum Engine Volume:</b> {data.get('max_displacement') or '<i>Not selected</i>'}\n\n"
+                f"⚙️ <u>Select the type of gearbox</u> (or skip this step):"
             )
+
+            return await call.message.edit_text(text, reply_markup=await IKB.gerabox_buttons_menu(geraboxes=gearbox))
 
     
     async def get_gerabox(self, call: CallbackQuery, callback_data: GearboxCallback, state: FSMContext) -> Message:
@@ -277,31 +292,32 @@ class ClientHandlers:
 
         bodytype = await get_bodytype(url=f"{data.get('url', None)}search/")
         if not bodytype:
-            return await call.message.edit_text(f"no bodytype")
+            return await call.message.edit_text("❌ <b>No body types available</b>")
         
         await state.update_data(all_bodytypes=bodytype, bodytypes=[])
 
-        return await call.message.edit_text(
-            (
-                f"You selected gearbox type: {gearbox or 'No selected'}.\n\n"
-                f"Brand: {data.get('name_car', 'No selected')}\n"
-                f"Model: {data.get('model') or 'No selected'}\n"
-                f"Minimum Year: {data.get('min_year', 'No selected')}\n"
-                f"Maximum Year: {data.get('max_year', 'No selected')}\n"
-                f"Minimum Engine Volume: {data.get('min_displacement', 'No selected')}\n"
-                f"Maximum Engine Volume: {data.get('max_displacement', 'No selected')}\n"
-                f"Engine Type: {', '.join(data.get('typengines', [])) or 'No selected'}\n"
-                f"Gearbox: {gearbox or 'No selected'}\n\n"
-                "Select the type of body (or skip this step):"
-            ), reply_markup=await IKB.bodytype_buttons_menu(bodytypes=bodytype, selected_bodytypes=None)
+        text = (
+            f"⚙️ <b>Gearbox type selected:</b> {gearbox or '<i>Not selected</i>'}\n\n"
+            f"🚘 <b>Brand:</b> {data.get('name_car', '<i>Not selected</i>')}\n"
+            f"📍 <b>Model:</b> {data.get('model') or '<i>Not selected</i>'}\n"
+            f"📅 <b>Minimum Year:</b> {data.get('min_year') or '<i>Not selected</i>'}\n"
+            f"📅 <b>Maximum Year:</b> {data.get('max_year') or '<i>Not selected</i>'}\n"
+            f"🔧 <b>Minimum Engine Volume:</b> {data.get('min_displacement') or '<i>Not selected</i>'}\n"
+            f"🔧 <b>Maximum Engine Volume:</b> {data.get('max_displacement') or '<i>Not selected</i>'}\n"
+            f"⚙️ <b>Engine Type:</b> {', '.join(data.get('typengines', [])) or '<i>Not selected</i>'}\n"
+            f"⚙️ <b>Gearbox:</b> {gearbox or '<i>Not selected</i>'}\n\n"
+            f"➡️ <u>Please select the body type</u> (or skip this step):"
         )
+
+        return await call.message.edit_text(text, reply_markup=await IKB.bodytype_buttons_menu(bodytypes=bodytype, selected_bodytypes=None))
 
     
     async def get_bodytype(self, call: CallbackQuery, callback_data: GearboxCallback, state: FSMContext) -> Message:
         data = await state.get_data()
-        all_bodytypes = data.get('all_bodytypes', [])
-        bodytypes = data.get('bodytypes', None)
+        all_bodytypes = data.get("all_bodytypes", [])
+        bodytypes = data.get("bodytypes", [])
         bodytype = callback_data.bodytype
+
         if bodytype:
             if bodytype not in bodytypes:
                 bodytypes.append(bodytype)
@@ -310,64 +326,85 @@ class ClientHandlers:
 
             await state.update_data(bodytypes=bodytypes)
 
-            return await call.message.edit_text(
-                (
-                f"You selected body type: {', '.join(bodytypes) or 'No selected'}.\n\n"
-                "Select the type of inspection (or skip this step):"
-                ), reply_markup=await IKB.bodytype_buttons_menu(bodytypes=all_bodytypes, selected_bodytypes=bodytypes)
+            text = (
+                f"🚙 <b>Body type selected:</b> {', '.join(bodytypes) or '<i>Not selected</i>'}\n\n"
+                f"➡️ <u>Please select the type of inspection</u> (or skip this step):"
             )
+
+            return await call.message.edit_text(text, reply_markup=await IKB.bodytype_buttons_menu(bodytypes=all_bodytypes, selected_bodytypes=bodytypes))
+
         else:
             inspections = await get_inspection(url=f"{data.get('url', None)}search/")
             if not inspections:
-                return await call.message.edit_text(f"no inspection")
+                return await call.message.edit_text("❌ <b>No inspections available</b>")
 
             await state.update_data(all_bodytypes=None)
 
-            return await call.message.edit_text(
-                (
-                f"You selected body type: {', '.join(bodytypes) or 'No selected'}.\n\n"
-                "Select the type of inspection (or skip this step):"
-                ), reply_markup=await IKB.inspection_buttons_menu(inspections=inspections)
+            text = (
+                f"🚙 <b>Body type selected:</b> {', '.join(bodytypes) or '<i>Not selected</i>'}\n\n"
+                f"➡️ <u>Please select the type of inspection</u> (or skip this step):"
             )
+
+            return await call.message.edit_text(text, reply_markup=await IKB.inspection_buttons_menu(inspections=inspections))
 
 
     async def get_inspection(self, call: CallbackQuery, callback_data: GearboxCallback, state: FSMContext) -> Message:
         await state.update_data(inspection=callback_data.inspection)
         await state.set_state(AddFilterCar.MIN_PRICE)
 
-        return await call.message.edit_text("Please enter the minimum price (Send 0 to skip minimum price):")
+        text = (
+            f"🛠 <b>Inspection type selected:</b> {callback_data.inspection or '<i>Not selected</i>'}\n\n"
+            f"💰 <u>Please enter the minimum price</u>\n"
+            f"(Send <b>0</b> to skip minimum price)"
+        )
+
+        return await call.message.edit_text(text)
 
     
     async def get_min_price(self, m: Message, state: FSMContext) -> Message:
         await state.update_data(min_price=int(m.text) or None)
         await state.set_state(AddFilterCar.MAX_PRICE)
 
-        return await m.answer("Please enter the maximum price (Send 0 to skip maximum price):")
+        text = (
+            f"💰 <b>Minimum price saved:</b> {m.text or '<i>Not selected</i>'}\n\n"
+            f"➡️ <u>Please enter the maximum price</u>\n"
+            f"(Send <b>0</b> to skip maximum price)"
+        )
+
+        return await m.answer(text)
 
     
     async def get_max_price(self, m: Message, state: FSMContext) -> Message:
         await state.update_data(max_price=int(m.text) or None)
         data = await state.get_data()
 
-        return await m.answer(
-            ( 
-                f"You selected <b>{data.get('name_car', 'No selected')}</b> <b>{data.get('model', 'No selected')}</b> with filters:\n"
-                f"<b>Price:</b> {data.get('min_price', 'No selected')} - {data.get('max_price', 'No selected')}\n"
-                f"<b>Type of engine:</b> {', '.join(data.get('typengines', [])) or 'No selected'} with volume: <b>from</b> {data.get('min_displacement', 'No selected')} <b>to</b> {data.get('max_displacement', 'No selected')}\n"
-                f"<b>Gearbox:</b> {data.get('gearbox', 'No selected')}\n"
-                f"<b>Years:</b> from <b>{data.get('min_year', 'No selected')}</b> to <b>{data.get('max_year', 'No selected')}</b>\n"
-                f"<b>Body:</b> {', '.join(data.get('bodytypes', [])) or 'No selected'}\n\n"
-                f"Click 'Approve' to proceed or 'Repeat' to fill out filters again"
-            ), reply_markup=await IKB.final_menu()
+        text = (
+            f"✅ <b>Your selection summary:</b>\n\n"
+            f"🚘 <b>Brand:</b> {data.get('name_car', '<i>Not selected</i>')}\n"
+            f"📍 <b>Model:</b> {data.get('model', '<i>Not selected</i>')}\n"
+            f"💰 <b>Price:</b> {data.get('min_price') or '<i>Not selected</i>'} – {data.get('max_price') or '<i>Not selected</i>'}\n"
+            f"⚙️ <b>Engine type:</b> {', '.join(data.get('typengines', [])) or '<i>Not selected</i>'}\n"
+            f"🔧 <b>Engine volume:</b> from {data.get('min_displacement') or '<i>Not selected</i>'} to {data.get('max_displacement') or '<i>Not selected</i>'}\n"
+            f"⚙️ <b>Gearbox:</b> {data.get('gearbox') or '<i>Not selected</i>'}\n"
+            f"📅 <b>Years:</b> from {data.get('min_year') or '<i>Not selected</i>'} to {data.get('max_year') or '<i>Not selected</i>'}\n"
+            f"🚙 <b>Body:</b> {', '.join(data.get('bodytypes', [])) or '<i>Not selected</i>'}\n\n"
+            f"➡️ <u>Click 'Approve' to proceed</u> or <u>'Repeat'</u> to fill out filters again."
         )
+
+        return await m.answer(text, reply_markup=await IKB.final_menu())
 
 
     async def repeat(self, call: CallbackQuery) -> Message:
         list_cars = await get_list_cars()
         if not list_cars:
-            return await m.answer("error")
+            return await call.message.answer("❌ <b>Error: no cars available</b>", parse_mode="HTML")
 
-        return await call.message.edit_text("Choise cars:", reply_markup=await IKB.cars_buttons_menu(list_cars=list_cars))
+        text = (
+            f"🚘 <b>Please choose a car brand</b>:\n"
+            f"➡️ Select one from the list below:"
+        )
+
+        return await call.message.edit_text(text, reply_markup=await IKB.cars_buttons_menu(list_cars=list_cars))
 
     
     async def approve(self, call: CallbackQuery, state: FSMContext) -> Message:
@@ -388,4 +425,10 @@ class ClientHandlers:
 
         thread_manager.start_threads(data_search={record_id: db[record_id]}, uid=call.from_user.id)
 
-        return await call.message.edit_text("<b>Your data has been successfully saved!</b>")
+        text = (
+            f"✅ <b>Your data has been successfully saved!</b>\n\n"
+            f"📂 Record ID: <code>{record_id}</code>\n"
+            f"➡️ You can now proceed with the search."
+        )
+
+        return await call.message.edit_text(text)

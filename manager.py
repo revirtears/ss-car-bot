@@ -2,11 +2,10 @@ from pathlib import Path
 from collections import deque
 from bs4 import BeautifulSoup as bs
 from datetime import datetime, timedelta
-import threading, asyncio, json, os, aiohttp
+import threading, asyncio, json, os, aiohttp, random, logging
 
 from playwright.async_api import async_playwright
 
-from loguru import logger
 from config import settings
 from request import fetch_soup
 
@@ -15,14 +14,22 @@ class SearchThread(threading.Thread):
     def __init__(self, data_search: dict, uid: int):
         super().__init__()
         self.stop_event = threading.Event()
-        self.lock = threading.Lock()  
+        self.lock = threading.Lock()
         self.data_search = dict(data_search)
         self.data_attempts = {key: 0 for key in data_search}
         self.seen_ids = {key: set() for key in data_search}
 
+        self.queue = asyncio.Queue()
+        self.rate_limit = 2.0 
+
 
     def run(self):
-        asyncio.run(self.loop())
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        worker_task = loop.create_task(self._worker()) 
+        loop.run_until_complete(self.loop())           
+        loop.run_until_complete(worker_task)      
 
 
     def add_filter(self, new_filter: dict):
@@ -33,6 +40,26 @@ class SearchThread(threading.Thread):
                     self.data_attempts[key] = 0
                     self.seen_ids[key] = set()
                     print(f"Фильтр добавлен напрямую: {key}")
+
+    
+    def update_filter(self, new_filter: dict):
+        with self.lock:
+            for key, value in new_filter.items():
+                if key in self.data_search:
+                    existing = self.data_search[key]
+                    if isinstance(existing, dict) and isinstance(value, dict):
+                        for field, field_value in value.items():
+                            if field not in existing or existing[field] != field_value:
+                                existing[field] = field_value
+                                print(f"Поле '{field}' обновлено для фильтра {key}")
+                    else:
+                        self.data_search[key] = value
+                        print(f"Фильтр {key} обновлён целиком")
+
+                    self.data_attempts[key] = 0
+                    self.seen_ids[key] = set()
+                    print(f"Сброс состояния для фильтра {key}")
+
 
     def has_filter(self, key: str) -> bool:
         with self.lock:
@@ -57,25 +84,30 @@ class SearchThread(threading.Thread):
                     with self.lock:
                         keys = list(self.data_search.keys())
 
-                    context = await browser.new_context()
-                    pages_info = await asyncio.gather(*(self._open_page(context, key, self.data_search[key]) for key in keys))
-
                     new_ads_data = []
-                    for obj in pages_info:
-                        new_ads = await self._process_page(obj["page"], obj["info"], obj["key"])
+
+                    for key in keys:
+                        info = self.data_search[key]
+
+                        context = await browser.new_context()
+
+                        page_obj = await self._open_page(context, key, info)
+                        page = page_obj["page"]
+
+                        new_ads = await self._process_page(page, info, key)
                         if new_ads:
                             for new_ad in new_ads:
-                                new_ads_data.append((new_ad, obj['info'])) 
-                        await obj["page"].close()
+                                new_ads_data.append((new_ad, info))
 
-                    await context.close()
+                        await page.close()
+                        await context.close()
 
                     if new_ads_data:
                         for data, info in new_ads_data:
-                            await self._send_new_ad(info=info, data=data)
-                            await asyncio.sleep(5)
+                            await self.queue.put((info, data))
+                            await asyncio.sleep(random.randint(5, 12))
 
-                    await asyncio.sleep(30)
+                    await asyncio.sleep(15)
 
             finally:
                 await browser.close()
@@ -111,13 +143,21 @@ class SearchThread(threading.Thread):
                 continue
             try:
                 if selector.startswith("select"):
+                    options_elements = await page.query_selector_all(selector + " option")
+                    available_labels = [await opt.inner_text() for opt in options_elements]
+
                     if isinstance(value, list):
-                        await page.select_option(selector, label=[str(v) for v in value], timeout=3000)
+                        valid_values = [str(v) for v in value if str(v) in available_labels]
+                        if valid_values:
+                            await page.select_option(selector, label=valid_values, timeout=3000)
                     else:
-                        await page.select_option(selector, label=str(value))
+                        if str(value) in available_labels:
+                            await page.select_option(selector, label=str(value), timeout=3000)
+
                 elif selector.startswith("input"):
                     await page.fill(selector, str(value))
-            except:
+            except Exception as e:
+                print(e)
                 print('error')
 
         await page.click("#sbtn")
@@ -130,7 +170,7 @@ class SearchThread(threading.Thread):
         with self.lock:
             attempt = self.data_attempts.get(key, 0)
 
-        print(f"key={key} | attempt={attempt}")
+        logging.info(f"key={key} | {info.get('name_car')} | attempt={attempt}")
 
         new_ads = []
         for ad in ads[:10]:
@@ -147,7 +187,7 @@ class SearchThread(threading.Thread):
                 else:
                     if listing not in self.seen_ids[key]:
                         self.seen_ids[key].add(listing)
-                        logger.info(f"Новое объявление [{key}] | {listing} |")
+                        logging.info(f"Новое объявление [{key}] | https://www.ss.com{href} |")
 
                         if href:
                             data = await generate_message(url=f'https://www.ss.com{href}')
@@ -163,20 +203,35 @@ class SearchThread(threading.Thread):
         return new_ads if new_ads else None
 
 
-    async def _send_new_ad(self, info, data):
-        img_src = data.get('image')
-        message = data.get('message')
-
+    async def _worker(self):
         async with aiohttp.ClientSession() as client:
-            await client.post(
-                f"https://api.telegram.org/bot{settings.TOKEN}/sendPhoto",
-                json={
-                    "chat_id": info.get('uid'),
-                    "photo": img_src,
-                    "caption": message,
-                    "parse_mode": "HTML"
-                },
-            )
+            while not self.stop_event.is_set():
+                info, data = await self.queue.get()
+                img_src = data.get('image')
+                message = data.get('message')
+
+                try:
+                    resp = await client.post(
+                        f"https://api.telegram.org/bot{settings.TOKEN}/sendPhoto",
+                        data={
+                            "chat_id": info.get('uid'),
+                            "photo": img_src,
+                            "caption": message,
+                            "parse_mode": "HTML"
+                        },
+                    )
+                    result = await resp.json()
+                    if not result.get("ok"):
+                        if result.get("error_code") == 429:
+                            retry_after = result["parameters"]["retry_after"]
+                            print(f"Flood control, sleeping {retry_after} sec")
+                            await asyncio.sleep(retry_after)
+                        else:
+                            print("Telegram error:", result)
+                except Exception as e:
+                    print("Send error:", e)
+
+                await asyncio.sleep(self.rate_limit)
 
 
     def stop(self):
@@ -261,6 +316,12 @@ class ThreadManager:
             return thread.data_attempts
         
         return []
+
+    
+    def update_filter(self, uid: int, new_filter: dict) -> None:
+        thread = self.active_threads.get(uid)
+        if thread:
+            thread.update_filter(new_filter=new_filter)
 
 
 def fetch_address_from_page(soup):

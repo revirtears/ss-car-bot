@@ -4,14 +4,14 @@ from loguru import logger
 from config import settings
 from .bot import SettingsBot
 from src.handlers import register_handlers
-from src.utils.loguru import setup_logger
+from src.utils.loguru import setup_logging
 
 from manager import thread_manager
 
 
 class BotRunner:
     def __init__(self) -> None:
-        setup_logger(level=settings.LOGGING_LEVEL)
+        setup_logging()
         self.module = SettingsBot(token=settings.TOKEN)
         self.dp = self.module.dp
 

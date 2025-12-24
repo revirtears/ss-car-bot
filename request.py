@@ -98,7 +98,7 @@ async def get_models(url: str) -> dict[str, list[str]]:
     if not select:
         return {}
 
-    skip = {"All", "Another", "Car rent", "Spare parts", "Car exchange"}
+    skip = {"All", "Another", "Car rent", "Spare parts", "Car exchange", "Citan", "Sprinter", "Vaneo", "Viano", "Vito"}
     result, current = {}, None
 
     for opt in select.select("option"):
