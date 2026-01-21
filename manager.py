@@ -1,7 +1,7 @@
 from pathlib import Path
 from collections import deque
 from bs4 import BeautifulSoup as bs
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import threading, asyncio, json, os, aiohttp, random, logging
 
 from playwright.async_api import async_playwright
@@ -17,19 +17,28 @@ class SearchThread(threading.Thread):
         self.lock = threading.Lock()
         self.data_search = dict(data_search)
         self.data_attempts = {key: 0 for key in data_search}
-        self.seen_ids = {key: set() for key in data_search}
+        self.seen_ids = {key: deque(maxlen=6) for key in data_search}
 
-        self.queue = asyncio.Queue()
+        self.queue = None
         self.rate_limit = 2.0 
 
 
     def run(self):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        self.queue = asyncio.Queue()
 
-        worker_task = loop.create_task(self._worker()) 
-        loop.run_until_complete(self.loop())           
-        loop.run_until_complete(worker_task)      
+        try:
+            loop.run_until_complete(
+                asyncio.gather(
+                    self.loop(),  
+                    self._worker()
+                )
+            )
+        except Exception as e:
+            logging.error(f"[Thread {self.uid}] Ошибка в run: {e}", exc_info=True)
+        finally:
+            loop.close()
 
 
     def add_filter(self, new_filter: dict):
@@ -38,7 +47,7 @@ class SearchThread(threading.Thread):
                 if key not in self.data_search:
                     self.data_search[key] = value
                     self.data_attempts[key] = 0
-                    self.seen_ids[key] = set()
+                    self.seen_ids[key] = deque(maxlen=6)
                     print(f"Фильтр добавлен напрямую: {key}")
 
     
@@ -57,7 +66,7 @@ class SearchThread(threading.Thread):
                         print(f"Фильтр {key} обновлён целиком")
 
                     self.data_attempts[key] = 0
-                    self.seen_ids[key] = set()
+                    self.seen_ids[key] = deque(maxlen=6)
                     print(f"Сброс состояния для фильтра {key}")
 
 
@@ -81,33 +90,42 @@ class SearchThread(threading.Thread):
 
             try:
                 while not self.stop_event.is_set():
-                    with self.lock:
-                        keys = list(self.data_search.keys())
+                    try:
+                        with self.lock:
+                            keys = list(self.data_search.keys())
 
-                    new_ads_data = []
+                        new_ads_data = []
 
-                    for key in keys:
-                        info = self.data_search[key]
+                        for key in keys:
+                            info = self.data_search[key]
+                            context = await browser.new_context()
+                            try:
+                                page_obj = await self._open_page(context, key, info)
+                                if not page_obj:
+                                    continue
 
-                        context = await browser.new_context()
+                                page = page_obj["page"]
 
-                        page_obj = await self._open_page(context, key, info)
-                        page = page_obj["page"]
+                                new_ads = await self._process_page(page, info, key)
+                                if new_ads:
+                                    for new_ad in new_ads:
+                                        new_ads_data.append((new_ad, info))
+                            except Exception as e:
+                                logging.warning(f"Ошибка при обработке {key}: {e}")
+                            finally:
+                                await context.close()
 
-                        new_ads = await self._process_page(page, info, key)
-                        if new_ads:
-                            for new_ad in new_ads:
-                                new_ads_data.append((new_ad, info))
+                        if new_ads_data:
+                            for data, info in new_ads_data:
+                                await self.queue.put((info, data))
 
-                        await page.close()
-                        await context.close()
-
-                    if new_ads_data:
-                        for data, info in new_ads_data:
-                            await self.queue.put((info, data))
                             await asyncio.sleep(random.randint(5, 12))
 
-                    await asyncio.sleep(15)
+                        await asyncio.sleep(30)
+
+                    except Exception as e:
+                        logging.error(f"Ошибка в итерации цикла: {e}", exc_info=True)
+                        await asyncio.sleep(5)
 
             finally:
                 await browser.close()
@@ -115,9 +133,15 @@ class SearchThread(threading.Thread):
 
     async def _open_page(self, context, key, info):
         page = await context.new_page()
-        await page.goto(info["url"] + "search/")
-        await page.wait_for_load_state("networkidle")
-        return {"page": page, "info": info, "key": key}
+
+        try:
+            await page.goto(info["url"] + "search/", timeout=5000)
+            await page.wait_for_load_state("networkidle")
+            return {"page": page, "info": info, "key": key}
+        except Exception as e:
+            logging.warning(f"[{key}] Ошибка при загрузке страницы: {e}")
+            await page.close()   
+            return None
 
 
     async def _process_page(self, page, info, key):
@@ -160,8 +184,13 @@ class SearchThread(threading.Thread):
                 print(e)
                 print('error')
 
-        await page.click("#sbtn")
-        await page.wait_for_load_state("networkidle")
+        try:
+            await page.click("#sbtn", timeout=10000)
+            await page.wait_for_load_state("networkidle")
+        except Exception as e:
+            logging.warning(f"[{key}] Ошибка при клике: {e}")
+            return None
+
 
         ads = await page.query_selector_all("a.am")
         if not ads:
@@ -173,7 +202,7 @@ class SearchThread(threading.Thread):
         logging.info(f"key={key} | {info.get('name_car')} | attempt={attempt}")
 
         new_ads = []
-        for ad in ads[:10]:
+        for ad in ads[:5]:
             title = await ad.inner_text()
             href = await ad.get_attribute("href")
             listing = f"{title}: {href}"
@@ -183,10 +212,10 @@ class SearchThread(threading.Thread):
                     return None
 
                 if attempt == 0:
-                    self.seen_ids[key].add(listing)
+                    self.seen_ids[key].append(listing)
                 else:
                     if listing not in self.seen_ids[key]:
-                        self.seen_ids[key].add(listing)
+                        self.seen_ids[key].append(listing)
                         logging.info(f"Новое объявление [{key}] | https://www.ss.com{href} |")
 
                         if href:
@@ -195,6 +224,16 @@ class SearchThread(threading.Thread):
                                 new_ads.append(data)
                             else:
                                 logger.warning(data.get("error"))
+                    else:
+                        if await self.is_ad_not_older_than_5_minutes(url=f"https://www.ss.com{href}"):
+                            logging.info(f"Новое объявление [{key}] | https://www.ss.com{href} |")
+
+                            if href:
+                                data = await generate_message(url=f'https://www.ss.com{href}')
+                                if data.get("success", False):
+                                    new_ads.append(data)
+                                else:
+                                    logger.warning(data.get("error"))
 
         with self.lock:
             if ads:
@@ -232,6 +271,47 @@ class SearchThread(threading.Thread):
                     print("Send error:", e)
 
                 await asyncio.sleep(self.rate_limit)
+
+
+    async def is_ad_not_older_than_5_minutes(self, url: str) -> bool:
+        """
+        True — если объявление на ss.com опубликовано не более 5 минут назад
+        """
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=10) as resp:
+                    if resp.status != 200:
+                        return False
+                    html = await resp.text()
+        except Exception:
+            return False
+
+        soup = bs(html, "lxml")
+
+        td = soup.find(
+            "td",
+            class_="msg_footer",
+            string=lambda x: x and "Date:" in x
+        )
+
+        if not td:
+            return False
+
+        try:
+            raw_date = td.get_text(strip=True).replace("Date:", "").strip()
+            logging.info(f"Просмотр даты объявления | {url} | Дата  {raw_date}")
+            ad_time = datetime.strptime(raw_date, "%d.%m.%Y %H:%M")
+        except Exception as e:
+            print(e)
+            return False
+
+        SITE_TZ = timezone(timedelta(hours=2))
+        ad_time = ad_time.replace(tzinfo=SITE_TZ)
+
+        now = datetime.now(SITE_TZ)
+    
+        return now - ad_time <= timedelta(minutes=3)
 
 
     def stop(self):
